@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  native:
+    # Builds the C++ core, CLI, agent and mount worker and runs the unit/integration tests against a fake phone.
+    # The SwiftUI app and real-phone tests need Xcode 16.3+/a phone and are not run here.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install libmtp libusb cmake ninja pkgconf
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMTPORT_WITH_FUSE=OFF
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Forbidden API check
+        run: tests/scripts/check_forbidden_api.sh .

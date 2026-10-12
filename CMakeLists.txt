@@ -1,0 +1,67 @@
+cmake_minimum_required(VERSION 3.24)
+project(MTPort VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(NOT APPLE)
+  message(FATAL_ERROR "MTPort targets macOS only (CommonCrypto, FSKit/macFUSE, IOKit).")
+endif()
+
+option(MTPORT_WITH_LIBMTP "Build the real libmtp backend (needs libmtp + libusb)" ON)
+option(MTPORT_WITH_FUSE "Build the macFUSE mount worker (needs macFUSE 5.4+ headers/libfuse)" ON)
+option(MTPORT_WITH_MOCK "Build the fake MTP devices (tests, CLI --backend fake, mock mounts)" ON)
+option(MTPORT_SANITIZE "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+set(MTPORT_FUSE_INCLUDE_DIR "" CACHE PATH
+    "Directory containing fuse.h to *compile-check* the adapter when macFUSE is not installed")
+
+add_compile_options(-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion -Wno-unused-command-line-argument)
+if(MTPORT_SANITIZE)
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
+# ---- dependency discovery (no hard-coded Homebrew prefix) -------------------------------
+find_package(PkgConfig QUIET)
+set(AF_HAVE_LIBMTP OFF)
+if(MTPORT_WITH_LIBMTP AND PkgConfig_FOUND)
+  pkg_check_modules(LIBMTP IMPORTED_TARGET libmtp>=1.1.20)
+  if(LIBMTP_FOUND)
+    set(AF_HAVE_LIBMTP ON)
+    message(STATUS "libmtp ${LIBMTP_VERSION} found via pkg-config")
+  endif()
+endif()
+if(MTPORT_WITH_LIBMTP AND NOT AF_HAVE_LIBMTP)
+  message(WARNING "libmtp not found: the real MTP backend will NOT be built. "
+                  "Install with: brew install libmtp libusb pkgconf")
+endif()
+
+set(AF_HAVE_FUSE OFF)
+set(AF_FUSE_COMPILE_ONLY OFF)
+if(MTPORT_WITH_FUSE)
+  find_path(AF_FUSE_INCLUDE fuse.h PATH_SUFFIXES fuse HINTS /usr/local/include /opt/homebrew/include)
+  find_library(AF_FUSE_LIB NAMES fuse HINTS /usr/local/lib /opt/homebrew/lib)
+  if(AF_FUSE_INCLUDE AND AF_FUSE_LIB)
+    set(AF_HAVE_FUSE ON)
+    message(STATUS "macFUSE libfuse: ${AF_FUSE_LIB} (headers ${AF_FUSE_INCLUDE})")
+  elseif(MTPORT_FUSE_INCLUDE_DIR)
+    set(AF_FUSE_COMPILE_ONLY ON)
+    message(STATUS "macFUSE runtime NOT found; adapter will be compile-checked only against "
+                   "${MTPORT_FUSE_INCLUDE_DIR}. No mount worker will be linked.")
+  else()
+    message(WARNING "macFUSE not found: mtport-mount will NOT be built. See docs/SETUP_MACOS.md")
+  endif()
+endif()
+
+enable_testing()
+if(MTPORT_WITH_MOCK)
+  add_subdirectory(tests/fakes)
+endif()
+add_subdirectory(native)
+if(MTPORT_WITH_MOCK)
+  add_subdirectory(tests)
+endif()
